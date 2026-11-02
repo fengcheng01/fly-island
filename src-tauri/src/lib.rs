@@ -1218,39 +1218,46 @@ fn install_zcode_hook_event(events: &mut Map<String, Value>, event_name: &str, e
 }
 
 fn zcode_running_hook_entry(script_path: &Path) -> Value {
-    json!({
-        "hooks": [
-            {
-                "type": "process",
-                "command": "cmd.exe",
-                "args": [
-                    "/d",
-                    "/s",
-                    "/c",
-                    format!("\"{}\" zcode", script_path.to_string_lossy())
-                ],
-                "timeoutMs": 5000,
-                "statusMessage": "Updating fly-island agent status"
-            }
-        ]
-    })
+    // ZCode spawns process hooks as a raw argv vector, so a cmd.exe one-liner
+    // with an embedded quoted path gets mangled by argv escaping ("\"C:\..."
+    // is not a command cmd.exe can parse). Reuse the same powershell.exe
+    // -File shape as the Stop hook, whose args are separate tokens.
+    zcode_hook_entry(
+        "powershell.exe",
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().to_string(),
+            "zcode".to_string(),
+            "running".to_string(),
+        ],
+    )
 }
 
 fn zcode_status_hook_entry(script_path: &Path, phase: &str) -> Value {
+    zcode_hook_entry(
+        "powershell.exe",
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().to_string(),
+            "zcode".to_string(),
+            phase.to_string(),
+        ],
+    )
+}
+
+fn zcode_hook_entry(command: &str, args: Vec<String>) -> Value {
     json!({
         "hooks": [
             {
                 "type": "process",
-                "command": "powershell.exe",
-                "args": [
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    script_path.to_string_lossy(),
-                    "zcode",
-                    phase
-                ],
+                "command": command,
+                "args": args,
                 "timeoutMs": 10000,
                 "statusMessage": "Updating fly-island agent status"
             }
