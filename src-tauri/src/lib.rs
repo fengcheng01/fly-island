@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
     env, fs,
+    io::Read,
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex, OnceLock,
@@ -61,8 +62,22 @@ const CODEX_RUNNING_MARKER_FILE_NAME: &str = "agent-codex-running.flag";
 const CODEX_RUNNING_HOLD_FILE_NAME: &str = "agent-codex-running-hold.flag";
 const CLAUDE_CODE_RUNNING_MARKER_FILE_NAME: &str = "agent-claudeCode-running.flag";
 const CLAUDE_CODE_RUNNING_HOLD_FILE_NAME: &str = "agent-claudeCode-running-hold.flag";
+const ZCODE_RUNNING_MARKER_FILE_NAME: &str = "agent-zcode-running.flag";
+const ZCODE_RUNNING_HOLD_FILE_NAME: &str = "agent-zcode-running-hold.flag";
+const DSH_RUNNING_MARKER_FILE_NAME: &str = "agent-dsh-running.flag";
+const DSH_RUNNING_HOLD_FILE_NAME: &str = "agent-dsh-running-hold.flag";
 const AGENT_RUNNING_SCRIPT_FILE_NAME: &str = "focusd-agent-running.cmd";
 const AGENT_STATUS_SCRIPT_FILE_NAME: &str = "focusd-agent-status.ps1";
+const ZCODE_CONFIG_DIR_NAME: &str = ".zcode";
+const ZCODE_CONFIG_FILE_NAME: &str = "cli/config.json";
+const DSH_HOME_DIR_NAME: &str = ".dsh";
+const DSH_PROFILES_DIR_NAME: &str = "profiles";
+const DSH_HOOKS_PLUGIN_PACKAGE: &str = "dsh-hooks";
+const DSH_HOOKS_PLUGIN_ID: &str = "dsh-hooks";
+const DSH_PROFILE_MARKER_FILE_NAME: &str = "cordis.yml";
+const DSH_PATCH_CONFIG_FILE_NAME: &str = "cordis.patch.yml";
+const FLY_ISLAND_DSH_PATCH_BLOCK_BEGIN: &str = "# --- fly-island-agent-status:begin (managed by fly-island) ---";
+const FLY_ISLAND_DSH_PATCH_BLOCK_END: &str = "# --- fly-island-agent-status:end ---";
 const AGENT_RUNNING_STALE_AFTER_MS: i64 = 10 * 60 * 1000;
 const FOCUSD_AGENT_HOOK_BLOCK_BEGIN: &str = "# BEGIN FocuSD Agent Status Hooks";
 const FOCUSD_AGENT_HOOK_BLOCK_END: &str = "# END FocuSD Agent Status Hooks";
@@ -211,6 +226,10 @@ struct PersistedAgentStatus {
     #[serde(default)]
     claude_code: AgentTaskStatus,
     #[serde(default)]
+    zcode: AgentTaskStatus,
+    #[serde(default)]
+    dsh: AgentTaskStatus,
+    #[serde(default)]
     updated_at: i64,
 }
 
@@ -219,6 +238,8 @@ struct PersistedAgentStatus {
 struct AgentStatusSnapshot {
     codex: AgentTaskStatus,
     claude_code: AgentTaskStatus,
+    zcode: AgentTaskStatus,
+    dsh: AgentTaskStatus,
     updated_at: i64,
     status_path: String,
 }
@@ -230,6 +251,8 @@ struct AgentHooksInstallResult {
     status_path: String,
     codex_config_path: String,
     claude_config_path: String,
+    zcode_config_path: String,
+    dsh_profile_paths: Vec<String>,
     installed_at: i64,
 }
 
@@ -639,6 +662,22 @@ fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSna
                 CLAUDE_CODE_RUNNING_HOLD_FILE_NAME,
             );
         }
+        "zcode" => {
+            persisted.zcode = cleared_status;
+            remove_agent_marker_files(
+                &app_dir,
+                ZCODE_RUNNING_MARKER_FILE_NAME,
+                ZCODE_RUNNING_HOLD_FILE_NAME,
+            );
+        }
+        "dsh" => {
+            persisted.dsh = cleared_status;
+            remove_agent_marker_files(
+                &app_dir,
+                DSH_RUNNING_MARKER_FILE_NAME,
+                DSH_RUNNING_HOLD_FILE_NAME,
+            );
+        }
         _ => {
             return Err("Unsupported agent provider.".to_string());
         }
@@ -656,7 +695,13 @@ fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSna
 }
 
 #[tauri::command]
-fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult, String> {
+async fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || install_agent_status_hooks_blocking(app))
+        .await
+        .map_err(|error| format!("Failed to join the agent hooks task: {error}"))?
+}
+
+fn install_agent_status_hooks_blocking(app: AppHandle) -> Result<AgentHooksInstallResult, String> {
     let app_dir = app
         .path()
         .app_data_dir()
@@ -671,6 +716,9 @@ fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult,
     let home_dir = windows_home_dir()?;
     let codex_config_path = home_dir.join(".codex").join("config.toml");
     let claude_config_path = home_dir.join(".claude").join("settings.json");
+    let zcode_config_path = home_dir
+        .join(ZCODE_CONFIG_DIR_NAME)
+        .join(ZCODE_CONFIG_FILE_NAME);
 
     install_codex_status_hooks(
         &codex_config_path,
@@ -679,6 +727,16 @@ fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult,
     )?;
     install_claude_code_status_hooks(
         &claude_config_path,
+        &running_script_path,
+        &status_script_path,
+    )?;
+    install_zcode_status_hooks(
+        &zcode_config_path,
+        &running_script_path,
+        &status_script_path,
+    )?;
+    let dsh_profile_paths = install_dsh_status_hooks(
+        &home_dir,
         &running_script_path,
         &status_script_path,
     )?;
@@ -691,6 +749,8 @@ fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult,
             .to_string(),
         codex_config_path: codex_config_path.to_string_lossy().to_string(),
         claude_config_path: claude_config_path.to_string_lossy().to_string(),
+        zcode_config_path: zcode_config_path.to_string_lossy().to_string(),
+        dsh_profile_paths,
         installed_at: current_unix_millis(),
     })
 }
@@ -768,6 +828,8 @@ fn default_agent_status_snapshot(status_path: String) -> AgentStatusSnapshot {
     AgentStatusSnapshot {
         codex: AgentTaskStatus::default(),
         claude_code: AgentTaskStatus::default(),
+        zcode: AgentTaskStatus::default(),
+        dsh: AgentTaskStatus::default(),
         updated_at: current_unix_millis(),
         status_path,
     }
@@ -777,6 +839,8 @@ fn default_persisted_agent_status() -> PersistedAgentStatus {
     PersistedAgentStatus {
         codex: AgentTaskStatus::default(),
         claude_code: AgentTaskStatus::default(),
+        zcode: AgentTaskStatus::default(),
+        dsh: AgentTaskStatus::default(),
         updated_at: current_unix_millis(),
     }
 }
@@ -788,6 +852,8 @@ fn agent_status_snapshot_from_persisted(
     AgentStatusSnapshot {
         codex: normalize_agent_task_status(persisted.codex),
         claude_code: normalize_agent_task_status(persisted.claude_code),
+        zcode: normalize_agent_task_status(persisted.zcode),
+        dsh: normalize_agent_task_status(persisted.dsh),
         updated_at: if persisted.updated_at > 0 {
             persisted.updated_at
         } else {
@@ -820,6 +886,28 @@ fn apply_agent_running_markers(app_dir: &Path, snapshot: &mut AgentStatusSnapsho
     ) {
         snapshot.claude_code.phase = marker_status.phase;
         snapshot.claude_code.updated_at = marker_status.updated_at;
+    }
+
+    if let Some(marker_status) = active_agent_running_marker_status(
+        app_dir,
+        &snapshot.zcode,
+        ZCODE_RUNNING_MARKER_FILE_NAME,
+        ZCODE_RUNNING_HOLD_FILE_NAME,
+        now,
+    ) {
+        snapshot.zcode.phase = marker_status.phase;
+        snapshot.zcode.updated_at = marker_status.updated_at;
+    }
+
+    if let Some(marker_status) = active_agent_running_marker_status(
+        app_dir,
+        &snapshot.dsh,
+        DSH_RUNNING_MARKER_FILE_NAME,
+        DSH_RUNNING_HOLD_FILE_NAME,
+        now,
+    ) {
+        snapshot.dsh.phase = marker_status.phase;
+        snapshot.dsh.updated_at = marker_status.updated_at;
     }
 }
 
@@ -972,14 +1060,14 @@ fn install_claude_code_hook_event(hooks: &mut Map<String, Value>, event_name: &s
         })
         .unwrap_or_default()
         .into_iter()
-        .filter_map(remove_managed_claude_code_hooks)
+        .filter_map(remove_managed_hook_config_entries)
         .collect::<Vec<_>>();
 
     entries.push(entry);
     hooks.insert(event_name.to_string(), Value::Array(entries));
 }
 
-fn remove_managed_claude_code_hooks(mut entry: Value) -> Option<Value> {
+fn remove_managed_hook_config_entries(mut entry: Value) -> Option<Value> {
     let Value::Object(entry_object) = &mut entry else {
         return Some(entry);
     };
@@ -1057,6 +1145,310 @@ fn claude_code_hook_entry(command: &str, args: Vec<String>, timeout: i64) -> Val
             }
         ]
     })
+}
+
+fn install_zcode_status_hooks(
+    config_path: &Path,
+    running_script_path: &Path,
+    status_script_path: &Path,
+) -> Result<(), String> {
+    let mut config = match fs::read_to_string(config_path) {
+        Ok(content) if !content.trim().is_empty() => serde_json::from_str::<Value>(&content)
+            .map_err(|error| format!("Failed to parse ZCode config.json: {error}"))?,
+        _ => json!({}),
+    };
+
+    let Some(root) = config.as_object_mut() else {
+        return Err("ZCode config.json must contain a JSON object.".to_string());
+    };
+
+    let hooks = root
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !hooks.is_object() {
+        *hooks = Value::Object(Map::new());
+    }
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or_else(|| "Failed to prepare the ZCode hooks object.".to_string())?;
+
+    // Configuration-file hooks are disabled by default in ZCode.
+    hooks.insert("enabled".to_string(), Value::Bool(true));
+
+    let events = hooks
+        .entry("events")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !events.is_object() {
+        *events = Value::Object(Map::new());
+    }
+    let events = events
+        .as_object_mut()
+        .ok_or_else(|| "Failed to prepare the ZCode hook events object.".to_string())?;
+
+    install_zcode_hook_event(
+        events,
+        "UserPromptSubmit",
+        zcode_running_hook_entry(running_script_path),
+    );
+    install_zcode_hook_event(
+        events,
+        "Stop",
+        zcode_status_hook_entry(status_script_path, "completed"),
+    );
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|error| format!("Failed to serialize ZCode config.json: {error}"))?;
+    write_text_file(config_path, &json)
+}
+
+fn install_zcode_hook_event(events: &mut Map<String, Value>, event_name: &str, entry: Value) {
+    let mut entries = events
+        .remove(event_name)
+        .and_then(|value| match value {
+            Value::Array(entries) => Some(entries),
+            _ => None,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(remove_managed_hook_config_entries)
+        .collect::<Vec<_>>();
+
+    entries.push(entry);
+    events.insert(event_name.to_string(), Value::Array(entries));
+}
+
+fn zcode_running_hook_entry(script_path: &Path) -> Value {
+    json!({
+        "hooks": [
+            {
+                "type": "process",
+                "command": "cmd.exe",
+                "args": [
+                    "/d",
+                    "/s",
+                    "/c",
+                    format!("\"{}\" zcode", script_path.to_string_lossy())
+                ],
+                "timeoutMs": 5000,
+                "statusMessage": "Updating fly-island agent status"
+            }
+        ]
+    })
+}
+
+fn zcode_status_hook_entry(script_path: &Path, phase: &str) -> Value {
+    json!({
+        "hooks": [
+            {
+                "type": "process",
+                "command": "powershell.exe",
+                "args": [
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    script_path.to_string_lossy(),
+                    "zcode",
+                    phase
+                ],
+                "timeoutMs": 10000,
+                "statusMessage": "Updating fly-island agent status"
+            }
+        ]
+    })
+}
+
+fn install_dsh_status_hooks(
+    home_dir: &Path,
+    running_script_path: &Path,
+    status_script_path: &Path,
+) -> Result<Vec<String>, String> {
+    let profiles_dir = home_dir
+        .join(DSH_HOME_DIR_NAME)
+        .join(DSH_PROFILES_DIR_NAME);
+    let Ok(entries) = fs::read_dir(&profiles_dir) else {
+        // DSH is not installed; nothing to configure.
+        return Ok(Vec::new());
+    };
+
+    let mut profile_names = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join(DSH_PROFILE_MARKER_FILE_NAME).is_file() {
+            profile_names.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    profile_names.sort();
+
+    if profile_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut patched_profiles = Vec::new();
+    let mut failures = Vec::new();
+    for profile_name in &profile_names {
+        match install_dsh_profile_hooks(
+            &profiles_dir.join(profile_name),
+            profile_name,
+            running_script_path,
+            status_script_path,
+        ) {
+            Ok(path_display) => patched_profiles.push(path_display),
+            Err(error) => failures.push(format!("{profile_name}: {error}")),
+        }
+    }
+
+    if patched_profiles.is_empty() && !failures.is_empty() {
+        return Err(format!(
+            "Failed to configure the dsh-hooks plugin: {}",
+            failures.join("; ")
+        ));
+    }
+
+    Ok(patched_profiles)
+}
+
+fn install_dsh_profile_hooks(
+    profile_dir: &Path,
+    profile_name: &str,
+    running_script_path: &Path,
+    status_script_path: &Path,
+) -> Result<String, String> {
+    // The dsh-hooks plugin must resolve at profile boot, so only write the
+    // managed config block after a successful plugin install.
+    run_dsh_plugin_add(profile_name)?;
+
+    let patch_path = profile_dir.join(DSH_PATCH_CONFIG_FILE_NAME);
+    let content = fs::read_to_string(&patch_path).unwrap_or_default();
+    let content = remove_managed_dsh_patch_block(&content);
+
+    if content
+        .lines()
+        .any(|line| line.trim() == format!("- id: {DSH_HOOKS_PLUGIN_ID}"))
+    {
+        return Err(format!(
+            "already has a custom {DSH_HOOKS_PLUGIN_ID} entry in {DSH_PATCH_CONFIG_FILE_NAME}; merge the fly-island hooks manually."
+        ));
+    }
+
+    let block = build_dsh_patch_block(running_script_path, status_script_path);
+    let mut next_content = content.trim_end().to_string();
+    if !next_content.is_empty() {
+        next_content.push_str("\n\n");
+    }
+    next_content.push_str(&block);
+
+    write_text_file(&patch_path, &next_content)?;
+    Ok(patch_path.to_string_lossy().to_string())
+}
+
+fn run_dsh_plugin_add(profile_name: &str) -> Result<(), String> {
+    let command = format!(
+        "dsh plugin --profile \"{}\" add {}",
+        profile_name, DSH_HOOKS_PLUGIN_PACKAGE
+    );
+    let mut child = Command::new("cmd.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["/d", "/s", "/c", &command])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to run the dsh CLI: {error}"))?;
+
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+
+                let stderr = child
+                    .stderr
+                    .take()
+                    .and_then(|mut stream| {
+                        let mut buffer = String::new();
+                        stream.read_to_string(&mut buffer).ok()?;
+                        Some(buffer)
+                    })
+                    .unwrap_or_default();
+                let detail = stderr.trim();
+                return Err(format!(
+                    "`{command}` failed{}",
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {detail}")
+                    }
+                ));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "`{command}` timed out after 300 seconds; run it manually to see the error."
+                    ));
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => return Err(format!("Failed to run the dsh CLI: {error}")),
+        }
+    }
+}
+
+fn build_dsh_patch_block(running_script_path: &Path, status_script_path: &Path) -> String {
+    let running_command = format!(
+        "\"{}\" dsh",
+        running_script_path.to_string_lossy()
+    );
+    let completed_command = agent_status_command(status_script_path, "dsh", "completed");
+    let aborted_command = agent_status_command(status_script_path, "dsh", "completed");
+    let failed_command = agent_status_command(status_script_path, "dsh", "failed");
+
+    format!(
+        r#"{begin}
+- id: dsh-hooks
+  name: dsh-hooks
+  config:
+    hooks:
+      - on: 'turn/start'
+        run: '{running_command}'
+      - on: 'turn/end'
+        when: 'completed'
+        run: '{completed_command}'
+      - on: 'turn/end'
+        when: 'aborted'
+        run: '{aborted_command}'
+      - on: 'turn/end'
+        when: 'error'
+        run: '{failed_command}'
+{end}"#,
+        begin = FLY_ISLAND_DSH_PATCH_BLOCK_BEGIN,
+        end = FLY_ISLAND_DSH_PATCH_BLOCK_END,
+        running_command = yaml_single_quoted(&running_command),
+        completed_command = yaml_single_quoted(&completed_command),
+        aborted_command = yaml_single_quoted(&aborted_command),
+        failed_command = yaml_single_quoted(&failed_command),
+    )
+}
+
+fn yaml_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn remove_managed_dsh_patch_block(content: &str) -> String {
+    let Some(start) = content.find(FLY_ISLAND_DSH_PATCH_BLOCK_BEGIN) else {
+        return content.to_string();
+    };
+
+    let tail_start = match content[start..].find(FLY_ISLAND_DSH_PATCH_BLOCK_END) {
+        Some(relative_end) => start + relative_end + FLY_ISLAND_DSH_PATCH_BLOCK_END.len(),
+        // A missing end marker means the managed block runs to EOF; drop all of it.
+        None => content.len(),
+    };
+
+    format!("{}{}", &content[..start], &content[tail_start..])
 }
 
 fn build_codex_hook_block(running_script_path: &Path, status_script_path: &Path) -> String {
@@ -1805,6 +2197,88 @@ mod tests {
         assert_eq!(parse_hex_color("#101013"), Some((16, 16, 19)));
         assert_eq!(parse_hex_color("101013"), None);
         assert_eq!(parse_hex_color("#xyzxyz"), None);
+    }
+
+    #[test]
+    fn zcode_hook_event_keeps_user_entries_and_replaces_managed_ones() {
+        let mut events = Map::new();
+        events.insert(
+            "UserPromptSubmit".to_string(),
+            json!([
+                {
+                    "hooks": [
+                        {
+                            "type": "process",
+                            "command": "cmd.exe",
+                            "args": ["/d", "/s", "/c", "\"C:\\old\\focusd-agent-running.cmd\" zcode"]
+                        }
+                    ]
+                },
+                {
+                    "hooks": [
+                        { "type": "command", "command": "echo user-hook" }
+                    ]
+                }
+            ]),
+        );
+
+        install_zcode_hook_event(
+            &mut events,
+            "UserPromptSubmit",
+            zcode_running_hook_entry(Path::new("C:\\app\\focusd-agent-running.cmd")),
+        );
+
+        let entries = events["UserPromptSubmit"].as_array().expect("entries");
+        assert_eq!(entries.len(), 2);
+        let serialized = serde_json::to_string(&entries).expect("serialize");
+        assert!(serialized.contains("user-hook"));
+        assert_eq!(
+            serialized.matches("focusd-agent-running.cmd").count(),
+            1,
+            "only the freshly installed managed hook may reference the script"
+        );
+        assert!(events["UserPromptSubmit"].is_array());
+    }
+
+    #[test]
+    fn zcode_snapshot_defaults_include_new_providers() {
+        let snapshot = default_agent_status_snapshot("status".to_string());
+        assert_eq!(snapshot.zcode.phase, "idle");
+        assert_eq!(snapshot.dsh.phase, "idle");
+
+        let persisted: PersistedAgentStatus =
+            serde_json::from_str(r#"{"codex":{"phase":"running"}}"#).expect("legacy status file");
+        assert_eq!(persisted.codex.phase, "running");
+        assert_eq!(persisted.zcode.phase, "idle");
+        assert_eq!(persisted.dsh.phase, "idle");
+    }
+
+    #[test]
+    fn dsh_patch_block_round_trips_through_removal() {
+        let block = build_dsh_patch_block(
+            Path::new("C:\\app data\\focusd-agent-running.cmd"),
+            Path::new("C:\\app data\\focusd-agent-status.ps1"),
+        );
+        assert!(block.contains(FLY_ISLAND_DSH_PATCH_BLOCK_BEGIN));
+        assert!(block.contains(FLY_ISLAND_DSH_PATCH_BLOCK_END));
+        assert!(block.contains("on: 'turn/start'"));
+        assert!(block.contains("when: 'error'"));
+        assert!(block.contains("id: dsh-hooks"));
+
+        let content = format!(
+            "# user patch layer\n- insert:\n  - id: mcp-idea\n\n{block}\n"
+        );
+        let stripped = remove_managed_dsh_patch_block(&content);
+        assert!(stripped.contains("- insert:"));
+        assert!(!stripped.contains("dsh-hooks"));
+        assert!(!stripped.contains(FLY_ISLAND_DSH_PATCH_BLOCK_BEGIN));
+    }
+
+    #[test]
+    fn dsh_patch_removal_drops_orphan_block_to_eof() {
+        let content = "keep me\n# --- fly-island-agent-status:begin (managed by fly-island) ---\n- id: dsh-hooks\n";
+        assert_eq!(remove_managed_dsh_patch_block(content), "keep me\n");
+        assert_eq!(remove_managed_dsh_patch_block("no block here"), "no block here");
     }
 }
 

@@ -8,6 +8,12 @@ if /I "%PROVIDER%"=="codex" (
 ) else if /I "%PROVIDER%"=="claudeCode" (
   set "MARKER=agent-claudeCode-running.flag"
   set "HOLD=agent-claudeCode-running-hold.flag"
+) else if /I "%PROVIDER%"=="zcode" (
+  set "MARKER=agent-zcode-running.flag"
+  set "HOLD=agent-zcode-running-hold.flag"
+) else if /I "%PROVIDER%"=="dsh" (
+  set "MARKER=agent-dsh-running.flag"
+  set "HOLD=agent-dsh-running-hold.flag"
 ) else (
   exit /b 2
 )

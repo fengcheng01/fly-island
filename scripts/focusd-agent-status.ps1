@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet("codex", "claudeCode")]
+  [ValidateSet("codex", "claudeCode", "zcode", "dsh")]
   [string]$Provider,
 
   [Parameter(Mandatory = $true, Position = 1)]
@@ -92,6 +92,20 @@ function Get-AgentMarkerNames {
     }
   }
 
+  if ($Provider -eq "zcode") {
+    return @{
+      Running = "agent-zcode-running.flag"
+      Hold = "agent-zcode-running-hold.flag"
+    }
+  }
+
+  if ($Provider -eq "dsh") {
+    return @{
+      Running = "agent-dsh-running.flag"
+      Hold = "agent-dsh-running-hold.flag"
+    }
+  }
+
   return @{
     Running = "agent-claudeCode-running.flag"
     Hold = "agent-claudeCode-running-hold.flag"
@@ -152,6 +166,8 @@ try {
   $state = [ordered]@{
     codex = New-AgentTaskStatus
     claudeCode = New-AgentTaskStatus
+    zcode = New-AgentTaskStatus
+    dsh = New-AgentTaskStatus
     updatedAt = $now
   }
 
@@ -160,17 +176,22 @@ try {
       $existing = Get-Content -LiteralPath $StatusPath -Raw | ConvertFrom-Json
       $state.codex = Copy-AgentTaskStatus -Source $existing.codex
       $state.claudeCode = Copy-AgentTaskStatus -Source $existing.claudeCode
+      $state.zcode = Copy-AgentTaskStatus -Source $existing.zcode
+      $state.dsh = Copy-AgentTaskStatus -Source $existing.dsh
     } catch {
       $state.codex = New-AgentTaskStatus
       $state.claudeCode = New-AgentTaskStatus
+      $state.zcode = New-AgentTaskStatus
+      $state.dsh = New-AgentTaskStatus
     }
   }
 
   $nextTask = New-AgentTaskStatus -Phase $Phase -TaskId $TaskId -UpdatedAt $now
-  if ($Provider -eq "codex") {
-    $state.codex = $nextTask
-  } else {
-    $state.claudeCode = $nextTask
+  switch ($Provider) {
+    "codex" { $state.codex = $nextTask }
+    "claudeCode" { $state.claudeCode = $nextTask }
+    "zcode" { $state.zcode = $nextTask }
+    "dsh" { $state.dsh = $nextTask }
   }
   $state.updatedAt = $now
 

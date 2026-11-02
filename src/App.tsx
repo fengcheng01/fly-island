@@ -82,7 +82,7 @@ type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq";
 type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
 type MediaPlaybackStatus = "unavailable" | "playing" | "paused";
-type AgentProvider = "codex" | "claudeCode";
+type AgentProvider = "codex" | "claudeCode" | "zcode" | "dsh";
 type AgentTaskPhase = "idle" | "running" | "completed" | "failed" | "stale";
 type AgentVisualState = "idle" | "running" | "attention";
 
@@ -204,6 +204,8 @@ type AgentHooksInstallResult = {
   statusPath: string;
   codexConfigPath: string;
   claudeConfigPath: string;
+  zcodeConfigPath: string;
+  dshProfilePaths: string[];
   installedAt: number;
 };
 
@@ -380,13 +382,17 @@ const DEFAULT_AGENT_TASK_STATUS: AgentTaskStatus = {
 const DEFAULT_AGENT_STATUS: AgentStatusSnapshot = {
   codex: DEFAULT_AGENT_TASK_STATUS,
   claudeCode: DEFAULT_AGENT_TASK_STATUS,
+  zcode: DEFAULT_AGENT_TASK_STATUS,
+  dsh: DEFAULT_AGENT_TASK_STATUS,
   updatedAt: 0,
   statusPath: "",
 };
-const AGENT_PROVIDERS: AgentProvider[] = ["codex", "claudeCode"];
+const AGENT_PROVIDERS: AgentProvider[] = ["codex", "claudeCode", "zcode", "dsh"];
 const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
   codex: "Codex",
   claudeCode: "Claude Code",
+  zcode: "ZCode",
+  dsh: "DSH",
 };
 const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
   settings: {

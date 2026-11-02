@@ -44,7 +44,7 @@ FocuSD brings frequent actions from separate windows into one compact island:
 - **Tasks, daily notes, and archives**: manage today's tasks, mark them complete, set the active task, write a daily note, and browse saved days as cards or a timeline. Optionally carry unfinished tasks forward and save a day as Markdown.
 - **Text and image clipboard history**: search copied content and notes, favorite common items, add notes, remove entries, and copy an item back to the clipboard. Configure image capture, history size, and the global shortcut.
 - **Music and system audio**: control the Windows media session with previous, play/pause, and next actions; a live waveform reflects audio activity.
-- **AI status light**: lifecycle hooks show whether Codex or Claude Code is running, complete, or needs attention. Install or repair the hooks from Settings.
+- **AI status light**: lifecycle hooks show whether Codex, Claude Code, ZCode, or DSH (DeepSeek Harness) is running, complete, or needs attention. Install or repair the hooks from Settings.
 - **DeepSeek quick translation**: open a separate translation window with a global shortcut, auto-detect Chinese/English or choose a direction, paste the latest clipboard text, and copy the result.
 - **QQ, WeChat, and QQ Mail**: switch between QQ, WeChat, and Mail from one row of brand tabs, with source actions alongside them. Review the latest 20 QQ notifications or emails, and open email bodies inside the island before returning to the list.
 - **Island appearance and startup**: choose classic or liquid-glass styling and system or pixel fonts; adjust size, opacity, colors, and top spacing; save up to six custom style presets, hide the island title, or enable launch at startup.
@@ -63,7 +63,7 @@ Expand the island to switch between tasks, music, clipboard, settings, and messa
 
 - **Quick translation** opens with **Alt+C** by default. Add a DeepSeek API key in the translator settings; it is stored in Windows Credential Manager. Text is sent to the DeepSeek API when you request a translation. Choose automatic detection or a direction, and press **Tab** in the input to paste the latest clipboard text.
 
-- **AI status light**: open **Settings → AI Agent 状态灯** and choose **安装/修复**. Restart Codex and any terminal running Claude Code; trust the new Codex hooks when prompted. See the [AI Agent status guide (Chinese)](docs/agent-status-hooks.md).
+- **AI status light**: open **Settings → AI Agent 状态灯** and choose **安装/修复**. Restart Codex, ZCode, DSH, or any terminal running Claude Code; trust the new Codex hooks when prompted. DSH support requires the `dsh` CLI; the installer adds the `dsh-hooks` plugin and hook config to each DSH profile. See the [AI Agent status guide (Chinese)](docs/agent-status-hooks.md).
 
 - **Clipboard history** captures text and, when enabled, images. Search, favorite, annotate, and copy entries from the clipboard panel. Configure capture settings, history limit, and global shortcut in Settings.
 
