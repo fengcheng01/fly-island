@@ -79,6 +79,7 @@ When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `ag
   },
   "zcode": {
     "phase": "idle",
+    "message": "optional captured result text",
     "updatedAt": 1783584000000
   },
   "dsh": {
@@ -90,6 +91,18 @@ When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `ag
 ```
 
 `phase === "running"` turns the light red. `phase === "failed"` turns the light yellow. Missing files, invalid JSON, missing fields, unknown phases, `idle`, and `completed` are treated as green states. A derived `stale` phase is returned by the app when a running marker remains for more than 10 minutes without a later status update.
+
+## Result Content Capture
+
+`focusd-agent-status.ps1` also records a short `message` per provider so the island can show what the agent did. When a turn finishes with captured content and **设置 → AI Agent 状态灯 → 完成后自动展开岛屿** is on, the island expands itself and shows the result card until the island collapses again or the card is dismissed.
+
+Content sources per provider:
+
+- **DSH**: the `dsh-hooks` plugin exports `DSH_HOOK_CONTENT` (the turn's assistant text) as an environment variable; the script reads it directly.
+- **ZCode / Claude Code / Codex command hooks**: the hook payload arrives on stdin as JSON. `prompt` becomes the running-phase message; on completion the script resolves the session's transcript — `transcript_path` from the payload, or ZCode's `~/.zcode/cli/rollout/model-io-session_<id>.jsonl` located through `CLAUDE_SESSION_ID` — and extracts the last assistant text.
+- Content is whitespace-normalized and truncated to 900 characters.
+
+If the script receives hook input it cannot turn into a message, it keeps the raw payload (first 8 KB) in `agent-last-hook-input.txt` next to `agent-status.json` for diagnosis.
 
 ## Manual Smoke Test
 

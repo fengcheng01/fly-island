@@ -206,6 +206,8 @@ struct AgentTaskStatus {
     task_id: Option<String>,
     #[serde(default)]
     updated_at: i64,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 impl Default for AgentTaskStatus {
@@ -214,6 +216,7 @@ impl Default for AgentTaskStatus {
             phase: default_agent_phase(),
             task_id: None,
             updated_at: 0,
+            message: None,
         }
     }
 }
@@ -643,6 +646,7 @@ fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSna
         phase: default_agent_phase(),
         task_id: None,
         updated_at: now,
+        message: None,
     };
 
     match provider.as_str() {
@@ -934,6 +938,7 @@ fn active_agent_running_marker_status(
             phase: phase.to_string(),
             task_id: status.task_id.clone(),
             updated_at: marker_updated_at,
+            message: status.message.clone(),
         });
     }
 
@@ -946,6 +951,7 @@ fn active_agent_running_marker_status(
             phase: "running".to_string(),
             task_id: status.task_id.clone(),
             updated_at: now,
+            message: status.message.clone(),
         })
     } else {
         None

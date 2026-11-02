@@ -192,6 +192,14 @@ type AgentTaskStatus = {
   phase: AgentTaskPhase;
   taskId?: string;
   updatedAt: number;
+  message?: string;
+};
+
+type AgentMessageCard = {
+  provider: AgentProvider;
+  phase: AgentTaskPhase;
+  message: string;
+  updatedAt: number;
 };
 
 type AgentStatusSnapshot = Record<AgentProvider, AgentTaskStatus> & {
@@ -242,6 +250,7 @@ type IslandSettings = {
   todoRotationSeconds: number;
   autoTuck: boolean;
   autoTuckSeconds: number;
+  agentAutoExpand: boolean;
 };
 
 type IslandPreset = {
@@ -270,6 +279,8 @@ type IslandShellProps = {
   mediaState: MediaState;
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
+  agentMessageCard: AgentMessageCard | null;
+  onDismissAgentMessage: () => void;
   onOpenPage: (page: IslandPage) => void;
   onWindowDragStart: () => void;
   onCollapse: () => void;
@@ -427,6 +438,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   todoRotationSeconds: 5,
   autoTuck: false,
   autoTuckSeconds: 30,
+  agentAutoExpand: true,
 };
 const LEGACY_DEFAULT_PRESET_IDS = new Set(["default-white", "default-khaki"]);
 const LEGACY_DEFAULT_PRESET_NAMES = new Set(["白色", "卡其"]);
@@ -767,6 +779,7 @@ function normalizeSettings(
     autoTuckSeconds: typeof settings?.autoTuckSeconds === "number" && Number.isFinite(settings.autoTuckSeconds)
       ? clamp(Math.round(settings.autoTuckSeconds), 1, 3_600)
       : DEFAULT_SETTINGS.autoTuckSeconds,
+    agentAutoExpand: settings?.agentAutoExpand !== false,
   };
 }
 
@@ -1112,6 +1125,8 @@ export function IslandShell({
   mediaState,
   agentVisualState,
   agentStatusLabel,
+  agentMessageCard,
+  onDismissAgentMessage,
   onOpenPage,
   onWindowDragStart,
   onCollapse,
@@ -1542,6 +1557,36 @@ export function IslandShell({
               </button>
             </div>
           </header>
+          {isExpanded && agentMessageCard ? (
+            <div className="agent-message-card">
+              <div className="agent-message-card__header">
+                <span
+                  className={[
+                    "agent-message-card__dot",
+                    `agent-message-card__dot--${agentMessageCard.phase}`,
+                  ].join(" ")}
+                  aria-hidden="true"
+                />
+                <span className="agent-message-card__title">
+                  {AGENT_PROVIDER_LABELS[agentMessageCard.provider]}
+                  {" · "}
+                  {getAgentPhaseLabel(agentMessageCard.phase, t)}
+                </span>
+                <button
+                  className="agent-message-card__close"
+                  type="button"
+                  aria-label={t.settings.agent.hideMessage}
+                  title={t.settings.agent.hideMessage}
+                  onClick={onDismissAgentMessage}
+                >
+                  <X size={12} strokeWidth={2.4} />
+                </button>
+              </div>
+              <div className="agent-message-card__body">
+                {agentMessageCard.message}
+              </div>
+            </div>
+          ) : null}
           <div className="island__content">{children}</div>
         </div>
       </div>
@@ -2217,6 +2262,13 @@ function LayoutEditor({
             </span>
           </button>
         </div>
+        <ToggleControl
+          label={t.settings.agent.autoExpand}
+          checked={settings.agentAutoExpand}
+          onChange={(agentAutoExpand) =>
+            onSettingsChange({ ...settings, agentAutoExpand })
+          }
+        />
         <div
           className={[
             "agent-status-panel",
@@ -4034,6 +4086,10 @@ function IslandApp({
   const mediaTargetRef = useRef<string | null>(null);
   const [agentStatus, setAgentStatus] =
     useState<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
+  const [agentMessageCard, setAgentMessageCard] =
+    useState<AgentMessageCard | null>(null);
+  const prevAgentStatusRef = useRef<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
+  const didHydrateAgentStatusRef = useRef(false);
   const isRefreshingAgentStatus = useRef(false);
   const isRefreshingMediaState = useRef(false);
   const isRefreshingAudioLevel = useRef(false);
@@ -4351,7 +4407,8 @@ function IslandApp({
         currentState.statusPath === snapshot.statusPath &&
         AGENT_PROVIDERS.every((provider) =>
           currentState[provider].phase === snapshot[provider].phase &&
-          currentState[provider].taskId === snapshot[provider].taskId,
+          currentState[provider].taskId === snapshot[provider].taskId &&
+          currentState[provider].message === snapshot[provider].message,
         )
           ? currentState
           : snapshot,
@@ -4377,6 +4434,60 @@ function IslandApp({
       setClearingAgentProvider(null);
     }
   }, []);
+
+  // Surface agent results on the island: a running prompt keeps a live card
+  // while the island is already expanded, and a completed/failed turn pops
+  // the island open with the captured result.
+  useEffect(() => {
+    if (!didHydrateAgentStatusRef.current) {
+      didHydrateAgentStatusRef.current = true;
+      prevAgentStatusRef.current = agentStatus;
+      return;
+    }
+
+    const previous = prevAgentStatusRef.current;
+    prevAgentStatusRef.current = agentStatus;
+
+    let latestCard: AgentMessageCard | null = null;
+    for (const provider of AGENT_PROVIDERS) {
+      const status = agentStatus[provider];
+      if (status.phase === previous[provider]?.phase) {
+        continue;
+      }
+
+      if (
+        (status.phase === "completed" || status.phase === "failed") &&
+        status.message
+      ) {
+        latestCard = {
+          provider,
+          phase: status.phase,
+          message: status.message,
+          updatedAt: status.updatedAt,
+        };
+        if (settings.agentAutoExpand) {
+          setIslandMode("expanded");
+        }
+      } else if (status.phase === "running" && status.message && !latestCard) {
+        latestCard = {
+          provider,
+          phase: "running",
+          message: status.message,
+          updatedAt: status.updatedAt,
+        };
+      }
+    }
+
+    if (latestCard) {
+      setAgentMessageCard(latestCard);
+    }
+  }, [agentStatus, settings.agentAutoExpand]);
+
+  useEffect(() => {
+    if (mode === "collapsed") {
+      setAgentMessageCard(null);
+    }
+  }, [mode]);
 
   const updateClipboardSettings = useCallback(
     async (nextSettings: ClipboardHistorySettings) => {
@@ -5678,6 +5789,8 @@ function IslandApp({
         mediaState={mediaState}
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
+        agentMessageCard={agentMessageCard}
+        onDismissAgentMessage={() => setAgentMessageCard(null)}
         onOpenPage={openIslandPage}
         onWindowDragStart={startIslandDrag}
         onCollapse={collapseIsland}

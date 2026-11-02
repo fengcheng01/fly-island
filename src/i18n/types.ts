@@ -390,6 +390,8 @@ export type Translations = {
       clearing: string;
       clearStatus: string;
       scriptsDir: string;
+      autoExpand: string;
+      hideMessage: string;
     };
 
     clipboard: {

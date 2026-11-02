@@ -387,6 +387,8 @@ const en: Translations = {
       clearing: "Clearing",
       clearStatus: "Clear status",
       scriptsDir: "Scripts folder",
+      autoExpand: "Auto-expand island on completion",
+      hideMessage: "Hide message",
     },
 
     clipboard: {

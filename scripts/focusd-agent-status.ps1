@@ -23,7 +23,8 @@ function New-AgentTaskStatus {
   param(
     [string]$Phase = "idle",
     [string]$TaskId = "",
-    [long]$UpdatedAt = 0
+    [long]$UpdatedAt = 0,
+    [string]$Message = ""
   )
 
   $status = [ordered]@{
@@ -33,6 +34,10 @@ function New-AgentTaskStatus {
 
   if ($TaskId) {
     $status.taskId = $TaskId
+  }
+
+  if ($Message) {
+    $status.message = $Message
   }
 
   return $status
@@ -65,7 +70,186 @@ function Copy-AgentTaskStatus {
     $taskId = [string]$Source.taskId
   }
 
-  return New-AgentTaskStatus -Phase $phase -TaskId $taskId -UpdatedAt $updatedAt
+  $message = ""
+  if ($Source.PSObject.Properties.Name -contains "message") {
+    $message = [string]$Source.message
+  }
+
+  return New-AgentTaskStatus -Phase $phase -TaskId $taskId -UpdatedAt $updatedAt -Message $message
+}
+
+function Get-TruncatedText {
+  param(
+    [string]$Text,
+    [int]$MaxLength = 900
+  )
+
+  if (-not $Text) {
+    return ""
+  }
+
+  $normalized = $Text -replace "(\r?\n\s*){3,}", "`n`n"
+  $normalized = $normalized.Trim()
+  if (-not $normalized) {
+    return ""
+  }
+
+  if ($normalized.Length -gt $MaxLength) {
+    return $normalized.Substring(0, $MaxLength) + "..."
+  }
+
+  return $normalized
+}
+
+function Get-MessageFromTranscript {
+  param([string]$Path)
+
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+    return ""
+  }
+
+  try {
+    $lines = Get-Content -LiteralPath $Path -Tail 40 -Encoding UTF8 -ErrorAction Stop
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+      $line = $lines[$i]
+      if (-not $line -or $line.Length -gt 2000000) {
+        continue
+      }
+      try {
+        $entry = $line | ConvertFrom-Json
+      } catch {
+        continue
+      }
+      if ($entry.type -ne "assistant") {
+        continue
+      }
+      $blocks = $entry.message.content
+      if ($blocks -is [string]) {
+        return $blocks
+      }
+      $texts = @($blocks | Where-Object { $_.type -eq "text" } | ForEach-Object { $_.text })
+      if ($texts.Count -gt 0) {
+        return ($texts -join "`n")
+      }
+    }
+  } catch {
+  }
+
+  return ""
+}
+
+function Get-MessageFromZcodeRollout {
+  param([string]$SessionId)
+
+  if (-not $SessionId) {
+    return ""
+  }
+
+  $clean = $SessionId -replace "^(session_|sess_)", ""
+  if (-not $clean) {
+    return ""
+  }
+
+  $dir = Join-Path $env:USERPROFILE ".zcode\cli\rollout"
+  if (-not (Test-Path -LiteralPath $dir)) {
+    return ""
+  }
+
+  $files = Get-ChildItem -LiteralPath $dir -Filter "model-io-*$clean*.jsonl" -ErrorAction SilentlyContinue
+  if (-not $files -or $files.Count -eq 0) {
+    return ""
+  }
+
+  $file = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  try {
+    $lines = Get-Content -LiteralPath $file.FullName -Tail 12 -Encoding UTF8 -ErrorAction Stop
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+      $line = $lines[$i]
+      if (-not $line -or $line.Length -gt 4000000) {
+        continue
+      }
+      try {
+        $entry = $line | ConvertFrom-Json
+      } catch {
+        continue
+      }
+      $response = $entry.response
+      if (-not $response) {
+        continue
+      }
+      $text = [string]$response.text
+      if ($text) {
+        return $text
+      }
+    }
+  } catch {
+  }
+
+  return ""
+}
+
+function Get-HookInputText {
+  param([string]$Phase)
+
+  $probe = @{
+    Text = ""
+    Raw = ""
+    SessionId = ""
+  }
+
+  if (-not [Console]::IsInputRedirected) {
+    return $probe
+  }
+
+  # Read raw bytes and decode UTF-8 explicitly: [Console]::In would decode
+  # with the legacy console codepage (GBK on zh-CN Windows) and corrupt
+  # non-ASCII agent content.
+  try {
+    $stream = [Console]::OpenStandardInput()
+    $memory = New-Object System.IO.MemoryStream
+    $buffer = New-Object byte[] 4096
+    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $memory.Write($buffer, 0, $read)
+    }
+    $raw = [System.Text.Encoding]::UTF8.GetString($memory.ToArray())
+    $memory.Dispose()
+  } catch {
+    return $probe
+  }
+
+  if (-not $raw) {
+    return $probe
+  }
+
+  $raw = $raw.Trim()
+  if (-not $raw) {
+    return $probe
+  }
+
+  $probe.Raw = $raw
+
+  try {
+    $payload = $raw | ConvertFrom-Json
+  } catch {
+    return $probe
+  }
+
+  if (-not $payload) {
+    return $probe
+  }
+
+  $names = $payload.PSObject.Properties.Name
+  if ($Phase -eq "running" -and $names -contains "prompt") {
+    $probe.Text = [string]$payload.prompt
+  }
+  if (-not $probe.Text -and $names -contains "transcript_path") {
+    $probe.Text = Get-MessageFromTranscript -Path ([string]$payload.transcript_path)
+  }
+  if ($names -contains "session_id") {
+    $probe.SessionId = [string]$payload.session_id
+  }
+
+  return $probe
 }
 
 function Get-DefaultStatusPath {
@@ -153,6 +337,31 @@ if (-not $StatusPath) {
   $StatusPath = Get-DefaultStatusPath
 }
 
+# Content capture: DSH hands over the turn text via DSH_HOOK_* environment
+# variables; command hooks (ZCode, Claude Code, Codex) receive a JSON payload
+# on stdin (prompt / transcript_path / session_id).
+$message = ""
+if ($Provider -eq "dsh" -and $env:DSH_HOOK_CONTENT) {
+  $message = Get-TruncatedText -Text $env:DSH_HOOK_CONTENT
+}
+
+$hookInput = Get-HookInputText -Phase $Phase
+if (-not $message -and $hookInput.Text) {
+  $message = Get-TruncatedText -Text $hookInput.Text
+}
+
+if (-not $message -and $Phase -ne "running") {
+  $sessionId = ""
+  if ($env:CLAUDE_SESSION_ID) {
+    $sessionId = $env:CLAUDE_SESSION_ID
+  } elseif ($hookInput.SessionId) {
+    $sessionId = $hookInput.SessionId
+  }
+  if ($sessionId) {
+    $message = Get-TruncatedText -Text (Get-MessageFromZcodeRollout -SessionId $sessionId)
+  }
+}
+
 $mutex = New-Object System.Threading.Mutex($false, "FocuSD.AgentStatus")
 $hasLock = $false
 
@@ -186,7 +395,7 @@ try {
     }
   }
 
-  $nextTask = New-AgentTaskStatus -Phase $Phase -TaskId $TaskId -UpdatedAt $now
+  $nextTask = New-AgentTaskStatus -Phase $Phase -TaskId $TaskId -UpdatedAt $now -Message $message
   switch ($Provider) {
     "codex" { $state.codex = $nextTask }
     "claudeCode" { $state.claudeCode = $nextTask }
@@ -209,6 +418,20 @@ try {
     $mutex.ReleaseMutex() | Out-Null
   }
   $mutex.Dispose()
+}
+
+# Diagnostics: keep the latest unrecognized hook payload so stdin-schema
+# problems can be diagnosed without attaching a debugger.
+if (-not $message -and $hookInput.Raw) {
+  $debugPath = Join-Path (Split-Path -Parent $StatusPath) "agent-last-hook-input.txt"
+  $snippet = $hookInput.Raw
+  if ($snippet.Length -gt 8192) {
+    $snippet = $snippet.Substring(0, 8192)
+  }
+  try {
+    [System.IO.File]::WriteAllText($debugPath, $snippet, (New-Object System.Text.UTF8Encoding($false)))
+  } catch {
+  }
 }
 
 if ($HookResponse) {

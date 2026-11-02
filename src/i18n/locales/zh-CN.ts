@@ -390,6 +390,8 @@ const zhCN: Translations = {
       clearing: "清除中",
       clearStatus: "清除状态",
       scriptsDir: "脚本目录",
+      autoExpand: "完成后自动展开岛屿",
+      hideMessage: "隐藏内容",
     },
 
     clipboard: {
