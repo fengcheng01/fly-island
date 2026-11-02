@@ -730,11 +730,7 @@ fn install_agent_status_hooks_blocking(app: AppHandle) -> Result<AgentHooksInsta
         &running_script_path,
         &status_script_path,
     )?;
-    install_zcode_status_hooks(
-        &zcode_config_path,
-        &running_script_path,
-        &status_script_path,
-    )?;
+    install_zcode_status_hooks(&zcode_config_path, &status_script_path)?;
     let dsh_profile_paths = install_dsh_status_hooks(
         &home_dir,
         &running_script_path,
@@ -1147,11 +1143,7 @@ fn claude_code_hook_entry(command: &str, args: Vec<String>, timeout: i64) -> Val
     })
 }
 
-fn install_zcode_status_hooks(
-    config_path: &Path,
-    running_script_path: &Path,
-    status_script_path: &Path,
-) -> Result<(), String> {
+fn install_zcode_status_hooks(config_path: &Path, status_script_path: &Path) -> Result<(), String> {
     let mut config = match fs::read_to_string(config_path) {
         Ok(content) if !content.trim().is_empty() => serde_json::from_str::<Value>(&content)
             .map_err(|error| format!("Failed to parse ZCode config.json: {error}"))?,
@@ -1188,7 +1180,7 @@ fn install_zcode_status_hooks(
     install_zcode_hook_event(
         events,
         "UserPromptSubmit",
-        zcode_running_hook_entry(running_script_path),
+        zcode_running_hook_entry(status_script_path),
     );
     install_zcode_hook_event(
         events,
@@ -1349,18 +1341,30 @@ fn install_dsh_profile_hooks(
     Ok(patch_path.to_string_lossy().to_string())
 }
 
+fn resolve_dsh_shim() -> Option<PathBuf> {
+    let path_var = env::var("PATH").ok()?;
+    env::split_paths(&path_var)
+        .map(|dir| dir.join("dsh.cmd"))
+        .find(|candidate| candidate.is_file())
+}
+
 fn run_dsh_plugin_add(profile_name: &str) -> Result<(), String> {
-    let command = format!(
-        "dsh plugin --profile \"{}\" add {}",
-        profile_name, DSH_HOOKS_PLUGIN_PACKAGE
-    );
-    let mut child = Command::new("cmd.exe")
+    // The npm shim dsh.cmd must be spawned directly with separate argv tokens:
+    // routing the whole command through cmd.exe /c mangles the quoted profile
+    // name into a literal "name" directory lookup, same as the ZCode hook bug.
+    let Some(shim) = resolve_dsh_shim() else {
+        return Err(
+            "dsh CLI not found on PATH (dsh.cmd); install @deepseek-ai/dsh first.".to_string(),
+        );
+    };
+
+    let mut child = Command::new(&shim)
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["/d", "/s", "/c", &command])
+        .args(["plugin", "--profile", profile_name, "add", DSH_HOOKS_PLUGIN_PACKAGE])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("Failed to run the dsh CLI: {error}"))?;
+        .map_err(|error| format!("Failed to run {} : {error}", shim.display()))?;
 
     let deadline = Instant::now() + Duration::from_secs(300);
     loop {
@@ -1381,7 +1385,7 @@ fn run_dsh_plugin_add(profile_name: &str) -> Result<(), String> {
                     .unwrap_or_default();
                 let detail = stderr.trim();
                 return Err(format!(
-                    "`{command}` failed{}",
+                    "dsh plugin --profile {profile_name} add {DSH_HOOKS_PLUGIN_PACKAGE} failed{}",
                     if detail.is_empty() {
                         String::new()
                     } else {
@@ -1394,12 +1398,12 @@ fn run_dsh_plugin_add(profile_name: &str) -> Result<(), String> {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "`{command}` timed out after 300 seconds; run it manually to see the error."
+                        "dsh plugin --profile {profile_name} add {DSH_HOOKS_PLUGIN_PACKAGE} timed out after 300 seconds; run it manually to see the error."
                     ));
                 }
                 thread::sleep(Duration::from_millis(250));
             }
-            Err(error) => return Err(format!("Failed to run the dsh CLI: {error}")),
+            Err(error) => return Err(format!("Failed to run {} : {error}", shim.display())),
         }
     }
 }
@@ -2232,7 +2236,7 @@ mod tests {
         install_zcode_hook_event(
             &mut events,
             "UserPromptSubmit",
-            zcode_running_hook_entry(Path::new("C:\\app\\focusd-agent-running.cmd")),
+            zcode_running_hook_entry(Path::new("C:\\app\\focusd-agent-status.ps1")),
         );
 
         let entries = events["UserPromptSubmit"].as_array().expect("entries");
@@ -2240,10 +2244,11 @@ mod tests {
         let serialized = serde_json::to_string(&entries).expect("serialize");
         assert!(serialized.contains("user-hook"));
         assert_eq!(
-            serialized.matches("focusd-agent-running.cmd").count(),
+            serialized.matches("focusd-agent-status.ps1").count(),
             1,
             "only the freshly installed managed hook may reference the script"
         );
+        assert!(serialized.contains("running"));
         assert!(events["UserPromptSubmit"].is_array());
     }
 
