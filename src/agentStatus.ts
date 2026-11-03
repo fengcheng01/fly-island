@@ -60,6 +60,16 @@ export type AgentTimingAdvance = {
 // stops, by reporting the finished turn as running again.
 export const AGENT_HOLD_WINDOW_MS = 1000;
 
+// How long a finished badge stays on the collapsed island before it steps
+// aside and lets the pending todo count come back.
+export const AGENT_FINISHED_BADGE_VISIBLE_MS = 5 * 60 * 1000;
+
+export function isFinishedBadgeVisible(finishedAt: number, now: number): boolean {
+  return (
+    finishedAt > 0 && now - finishedAt < AGENT_FINISHED_BADGE_VISIBLE_MS
+  );
+}
+
 // The hook writes a short-lived "running" hold right after a fast task stops so
 // the status light stays visible for a moment. It reuses the finished turn's
 // message and reports the current time, so it must not be mistaken for a new

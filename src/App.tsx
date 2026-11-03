@@ -61,11 +61,13 @@ import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages"
 import { MessageSourceIcon } from "./MessageSourceIcon";
 import { AgentProviderIcon } from "./AgentProviderIcon";
 import {
+  AGENT_FINISHED_BADGE_VISIBLE_MS,
   AGENT_PROVIDERS,
   AGENT_PROVIDER_LABELS,
   advanceAgentTiming,
   createAgentTimingMap,
   formatAgentDuration,
+  isFinishedBadgeVisible,
   isNewAgentCompletion,
   isNewAgentRun,
   type AgentProvider,
@@ -1370,11 +1372,16 @@ export function IslandShell({
           }}
         >
           <button
-            className={
-              agentBadge
-                ? "island__open-button island__open-button--agent"
-                : "island__open-button"
-            }
+            className={[
+              "island__open-button",
+              agentBadge ? "island__open-button--agent" : "",
+              // With no message to show the badge is the only content of the
+              // bar, so it is centred on the island instead of the leftover
+              // space the summary would otherwise claim.
+              agentBadge && !preview ? "island__open-button--agent-only" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             type="button"
             aria-label={preview ? t.messages.openPreview(messagePreviewText(preview, t.messages), t.messages.sourceLabels[preview.source]) : t.messages.expand(collapsedLabel)}
             aria-expanded={preview ? undefined : isExpanded}
@@ -1420,16 +1427,16 @@ export function IslandShell({
               <span className={pulseClassName} title={agentStatusLabel} />
             )}
             <CollapsedMessageContent preview={preview} enabled={!isExpanded && !isTucked}>
-              {showCollapsedText && showTitle && (
+              {!agentBadge && showCollapsedText && showTitle && (
                 <span className="island__brand">fly-island</span>
               )}
-              {showCollapsedText && collapsedTaskTitle && (
+              {!agentBadge && showCollapsedText && collapsedTaskTitle && (
                 <span className="island__active-task" key={collapsedTaskTitle}>
                   {showTitle ? "· " : ""}
                   {collapsedTaskTitle}
                 </span>
               )}
-              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && !agentBadge && (
+              {!agentBadge && showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && (
                 <span className="island__todo-count">
                   {showTitle ? "· " : ""}
                   {t.island.pendingTodos(collapsedTodoCount)}
@@ -4625,6 +4632,45 @@ function IslandApp({
     return () => window.clearInterval(timer);
   }, [mode, runningAgentsKey, runningAgents.length]);
 
+  // The finished badge steps aside after AGENT_FINISHED_BADGE_VISIBLE_MS.
+  // Schedule a single re-render at that moment so the pending todo count comes
+  // back without waiting for another status change.
+  const agentFinishedBadgeHideAt = useMemo(() => {
+    if (runningAgents.length > 0) {
+      return null;
+    }
+
+    const provider = AGENT_PROVIDERS.filter((candidate) => {
+      const status = agentStatus[candidate];
+      return (
+        (status.phase === "completed" || status.phase === "failed") &&
+        status.updatedAt > 0
+      );
+    }).sort((a, b) => agentStatus[b].updatedAt - agentStatus[a].updatedAt)[0];
+
+    return provider
+      ? agentStatus[provider].updatedAt + AGENT_FINISHED_BADGE_VISIBLE_MS
+      : null;
+  }, [agentStatus, runningAgents.length]);
+
+  useEffect(() => {
+    if (agentFinishedBadgeHideAt === null) {
+      return;
+    }
+
+    const remaining = agentFinishedBadgeHideAt - Date.now();
+    if (remaining <= 0) {
+      setAgentClock(Date.now());
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => setAgentClock(Date.now()),
+      remaining + 100,
+    );
+    return () => window.clearTimeout(timer);
+  }, [agentFinishedBadgeHideAt]);
+
   const updateClipboardSettings = useCallback(
     async (nextSettings: ClipboardHistorySettings) => {
       const normalizedSettings = normalizeClipboardSettings(nextSettings);
@@ -5923,9 +5969,9 @@ function IslandApp({
       };
     }
 
-    // Nothing is running: keep the last finished run visible until that agent
-    // starts a new task. The badge comes from the status itself so a missing
-    // duration never makes it disappear.
+    // Nothing is running: keep the last finished run visible for a while, then
+    // step aside so the pending todo count returns. The badge comes from the
+    // status itself so a missing duration never makes it disappear.
     const finishedProvider = AGENT_PROVIDERS.filter(
       (provider) =>
         agentStatus[provider].phase === "completed" ||
@@ -5933,11 +5979,16 @@ function IslandApp({
     ).sort((a, b) => agentStatus[b].updatedAt - agentStatus[a].updatedAt)[0];
 
     if (finishedProvider) {
+      const finishedStatus = agentStatus[finishedProvider];
+      if (!isFinishedBadgeVisible(finishedStatus.updatedAt, agentClock)) {
+        return null;
+      }
+
       const durationMs = agentTimings[finishedProvider].durationMs;
       const timerText =
         durationMs !== null ? formatAgentDuration(durationMs) : null;
       const providerLabel = AGENT_PROVIDER_LABELS[finishedProvider];
-      const isFailed = agentStatus[finishedProvider].phase === "failed";
+      const isFailed = finishedStatus.phase === "failed";
       const label = isFailed
         ? t.agent.failed(providerLabel)
         : t.agent.done(providerLabel);

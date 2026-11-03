@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   advanceAgentTiming,
+  AGENT_FINISHED_BADGE_VISIBLE_MS,
   createAgentTimingMap,
   formatAgentDuration,
   isAgentHoldEcho,
+  isFinishedBadgeVisible,
   isNewAgentCompletion,
   isNewAgentRun,
 } from "../src/agentStatus.ts";
@@ -182,6 +184,25 @@ test("a hold echo keeps the frozen duration and reports no second completion", (
   const afterExpiry = advanceAgentTiming(afterEcho.timings, echo, again);
   assert.equal(afterExpiry.timings.zcode.durationMs, 500);
   assert.deepEqual(afterExpiry.finished, []);
+});
+
+test("a finished badge steps aside after five minutes", () => {
+  const finishedAt = 1_000_000;
+  assert.equal(isFinishedBadgeVisible(finishedAt, finishedAt), true);
+  assert.equal(
+    isFinishedBadgeVisible(finishedAt, finishedAt + AGENT_FINISHED_BADGE_VISIBLE_MS - 1),
+    true,
+  );
+  assert.equal(
+    isFinishedBadgeVisible(finishedAt, finishedAt + AGENT_FINISHED_BADGE_VISIBLE_MS),
+    false,
+  );
+  assert.equal(
+    isFinishedBadgeVisible(finishedAt, finishedAt + AGENT_FINISHED_BADGE_VISIBLE_MS * 3),
+    false,
+  );
+  // A status without a usable timestamp never keeps the badge.
+  assert.equal(isFinishedBadgeVisible(0, Date.now()), false);
 });
 
 test("durations are formatted as mm:ss and grow to h:mm:ss", () => {

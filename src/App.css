@@ -421,6 +421,17 @@ input,
   padding-right: 8px;
 }
 
+/* The summary keeps flex: 1 and would still push the badge to the left, so the
+   badge leaves the flow and centres on the island itself. The offsets are
+   explicit so the placement does not depend on the static position of an
+   absolutely positioned flex child. */
+.island__open-button--agent-only .island__agent-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .island__pulse {
   width: 9px;
   height: 9px;
