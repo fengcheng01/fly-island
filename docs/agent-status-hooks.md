@@ -99,7 +99,7 @@ When the turn finishes, `focusd-agent-status.ps1` removes the marker, writes `ag
 Content sources per provider:
 
 - **DSH**: the `dsh-hooks` plugin exports `DSH_HOOK_CONTENT` (the turn's assistant text) as an environment variable; the script reads it directly.
-- **ZCode / Claude Code / Codex command hooks**: the hook payload arrives on stdin as JSON. `prompt` becomes the running-phase message; on completion the script resolves the session's transcript — `transcript_path` from the payload, or ZCode's `~/.zcode/cli/rollout/model-io-session_<id>.jsonl` located through `CLAUDE_SESSION_ID` — and extracts the last assistant text.
+- **ZCode / Claude Code / Codex command hooks**: the hook payload arrives on stdin as JSON. `prompt` becomes the running-phase message; on completion the script resolves the session's transcript — `transcript_path` from the payload, or ZCode's `~/.zcode/cli/rollout/model-io-session_<id>.jsonl` located through `CLAUDE_SESSION_ID` — and extracts the last assistant text. Only the tail of the transcript is read: Windows PowerShell's `Get-Content -Tail` reads the whole file, which took about 44 seconds on a 54MB session log and made the Stop hook hit its 10 second timeout, leaving the running marker behind so the island kept showing a running task after the turn ended.
 - Content is whitespace-normalized and truncated to 900 characters.
 
 If the script receives hook input it cannot turn into a message, it keeps the raw payload (first 8 KB) in `agent-last-hook-input.txt` next to `agent-status.json` for diagnosis.
@@ -109,7 +109,7 @@ If the script receives hook input it cannot turn into a message, it keeps the ra
 While an agent is working, the collapsed island shows that agent's logo next to a live timer instead of the plain status dot. The timer starts when the prompt was submitted, which is the moment the running marker file was written, and it keeps counting until the turn ends.
 
 - Several agents working at the same time: the collapsed island cycles through them every 3 seconds.
-- While an agent is running, the collapsed island hides the pending todo count to leave room for the logo and the timer. The count comes back once the run ends and the badge only shows the frozen duration.
+- While an agent badge is shown, the collapsed island hides the pending todo count and centres the badge, so the logo and timer stand alone. The count returns once the agent status is cleared in Settings.
 - When the turn ends, the timer freezes at the final duration and stays visible until that agent starts a new task.
 - A run that was never seen in the running phase, for example the island app was closed while the agent worked, has no known start time, so no duration is shown for it.
 - The finished badge comes from `agent-status.json` itself, so it stays visible for the last finished run even when that run's duration is unknown.

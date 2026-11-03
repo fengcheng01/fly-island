@@ -138,6 +138,41 @@ function Get-MessageFromTranscript {
   return ""
 }
 
+function Read-TranscriptTailLines {
+  param(
+    [string]$Path,
+    [int]$TailBytes = 524288
+  )
+
+  $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+  try {
+    $length = $stream.Length
+    if ($length -le 0) {
+      return @()
+    }
+
+    $start = [Math]::Max(0, $length - $TailBytes)
+    $stream.Seek($start, [System.IO.SeekOrigin]::Begin) | Out-Null
+    $buffer = New-Object byte[] ($length - $start)
+    $read = $stream.Read($buffer, 0, $buffer.Length)
+  } finally {
+    $stream.Dispose()
+  }
+
+  if ($read -le 0) {
+    return @()
+  }
+
+  $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+  $lines = $text -split "`n"
+  if ($start -gt 0 -and $lines.Count -gt 1) {
+    # The first line starts mid-record when the read began inside the file.
+    $lines = $lines[1..($lines.Count - 1)]
+  }
+
+  return $lines
+}
+
 function Get-MessageFromZcodeRollout {
   param([string]$SessionId)
 
@@ -162,7 +197,11 @@ function Get-MessageFromZcodeRollout {
 
   $file = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
   try {
-    $lines = Get-Content -LiteralPath $file.FullName -Tail 12 -Encoding UTF8 -ErrorAction Stop
+    # Read only the tail bytes of the transcript. Windows PowerShell 5.1 reads
+    # the whole file for Get-Content -Tail, which took ~44s on a 54MB session
+    # log and made the Stop hook hit its 10s timeout, leaving the running marker
+    # behind so the island kept showing a running task after the turn ended.
+    $lines = Read-TranscriptTailLines -Path $file.FullName -TailBytes 524288
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
       $line = $lines[$i]
       if (-not $line -or $line.Length -gt 4000000) {

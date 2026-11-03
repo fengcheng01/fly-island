@@ -413,6 +413,14 @@ input,
   border-radius: 0 0 12px 12px;
 }
 
+/* The agent badge is the main content of the collapsed bar while it is shown,
+   so it sits centred instead of hugging the left edge. */
+.island__open-button--agent {
+  justify-content: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .island__pulse {
   width: 9px;
   height: 9px;

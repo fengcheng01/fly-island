@@ -1370,7 +1370,11 @@ export function IslandShell({
           }}
         >
           <button
-            className="island__open-button"
+            className={
+              agentBadge
+                ? "island__open-button island__open-button--agent"
+                : "island__open-button"
+            }
             type="button"
             aria-label={preview ? t.messages.openPreview(messagePreviewText(preview, t.messages), t.messages.sourceLabels[preview.source]) : t.messages.expand(collapsedLabel)}
             aria-expanded={preview ? undefined : isExpanded}
@@ -1425,7 +1429,7 @@ export function IslandShell({
                   {collapsedTaskTitle}
                 </span>
               )}
-              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && agentBadge?.state !== "running" && (
+              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && !agentBadge && (
                 <span className="island__todo-count">
                   {showTitle ? "· " : ""}
                   {t.island.pendingTodos(collapsedTodoCount)}
