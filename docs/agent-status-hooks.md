@@ -109,6 +109,7 @@ If the script receives hook input it cannot turn into a message, it keeps the ra
 While an agent is working, the collapsed island shows that agent's logo next to a live timer instead of the plain status dot. The timer starts when the prompt was submitted, which is the moment the running marker file was written, and it keeps counting until the turn ends.
 
 - Several agents working at the same time: the collapsed island cycles through them every 3 seconds.
+- While an agent badge is shown, the collapsed island hides the pending todo count to leave room for the logo and the timer.
 - When the turn ends, the timer freezes at the final duration and stays visible until that agent starts a new task.
 - A run that was never seen in the running phase, for example the island app was closed while the agent worked, has no known start time, so no duration is shown for it.
 - Failed and stalled runs use the same badge with the attention colour.

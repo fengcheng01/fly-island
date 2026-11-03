@@ -1403,7 +1403,7 @@ export function IslandShell({
                 ].join(" ")}
                 title={agentBadge.label}
               >
-                <AgentProviderIcon provider={agentBadge.provider} size={16} />
+                <AgentProviderIcon provider={agentBadge.provider} size={20} />
                 {agentBadge.timerText ? (
                   <span className="island__agent-badge__timer">
                     {agentBadge.timerText}
@@ -1423,7 +1423,7 @@ export function IslandShell({
                   {collapsedTaskTitle}
                 </span>
               )}
-              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && (
+              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && !agentBadge && (
                 <span className="island__todo-count">
                   {showTitle ? "· " : ""}
                   {t.island.pendingTodos(collapsedTodoCount)}

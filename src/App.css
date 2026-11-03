@@ -473,9 +473,9 @@ input,
 .island__agent-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   flex: 0 0 auto;
-  padding: 2px 6px 2px 3px;
+  padding: 2px 9px 2px 4px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -500,7 +500,7 @@ input,
 
 .island__agent-badge__timer {
   color: rgba(248, 246, 240, 0.92);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -894,9 +894,9 @@ input,
 .agent-brand-icon {
   display: block;
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
   object-fit: contain;
 }
 
