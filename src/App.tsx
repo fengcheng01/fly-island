@@ -1423,7 +1423,7 @@ export function IslandShell({
                   {collapsedTaskTitle}
                 </span>
               )}
-              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && !agentBadge && (
+              {showCollapsedText && !collapsedTaskTitle && collapsedTodoCount !== null && agentBadge?.state !== "running" && (
                 <span className="island__todo-count">
                   {showTitle ? "· " : ""}
                   {t.island.pendingTodos(collapsedTodoCount)}
