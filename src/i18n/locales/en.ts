@@ -193,7 +193,10 @@ const en: Translations = {
     running: (provider) => `${provider} is running`,
     failed: (provider) => `${provider} failed`,
     stale: (provider) => `${provider} may have stalled`,
+    done: (provider) => `${provider} finished`,
     idleOrDone: "AI agent idle or finished",
+    duration: (time) => `took ${time}`,
+    queueMore: (count) => `${count} more`,
     phase: {
       running: "Running",
       completed: "Done",

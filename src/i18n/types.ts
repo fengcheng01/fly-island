@@ -195,7 +195,10 @@ export type Translations = {
     running: (provider: string) => string;
     failed: (provider: string) => string;
     stale: (provider: string) => string;
+    done: (provider: string) => string;
     idleOrDone: string;
+    duration: (time: string) => string;
+    queueMore: (count: number) => string;
     phase: {
       running: string;
       completed: string;

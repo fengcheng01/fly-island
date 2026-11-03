@@ -470,6 +470,52 @@ input,
   color: #ffd166;
 }
 
+.island__agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 2px 6px 2px 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.18);
+}
+
+.island__agent-badge--running {
+  background: rgba(255, 77, 94, 0.22);
+  border-color: rgba(255, 77, 94, 0.45);
+  animation: islandAgentBadgePulse 1.8s ease-in-out infinite;
+}
+
+.island__agent-badge--attention {
+  background: rgba(255, 209, 102, 0.22);
+  border-color: rgba(255, 209, 102, 0.45);
+}
+
+.island__agent-badge--done {
+  background: rgba(53, 233, 133, 0.16);
+  border-color: rgba(53, 233, 133, 0.32);
+}
+
+.island__agent-badge__timer {
+  color: rgba(248, 246, 240, 0.92);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+@keyframes islandAgentBadgePulse {
+  0%,
+  100% {
+    box-shadow: 0 0 8px rgba(255, 77, 94, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(255, 77, 94, 0.52);
+  }
+}
+
 .island--title-hidden .island__open-button {
   padding-left: 8px;
 }
@@ -843,6 +889,15 @@ input,
 
 .message-brand-icon--wechat {
   border-radius: 4px;
+}
+
+.agent-brand-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .icon-button:hover {
@@ -3178,6 +3233,18 @@ input,
   white-space: nowrap;
 }
 
+.agent-message-card__queue {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: rgba(248, 246, 240, 0.72);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .agent-message-card__close {
   width: 22px;
   height: 22px;
@@ -3918,6 +3985,10 @@ input,
 
 @media (prefers-reduced-motion: reduce) {
   .island__active-task {
+    animation: none;
+  }
+
+  .island__agent-badge--running {
     animation: none;
   }
 

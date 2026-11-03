@@ -193,7 +193,10 @@ const zhCN: Translations = {
     running: (provider) => `${provider} 正在运行`,
     failed: (provider) => `${provider} 运行失败`,
     stale: (provider) => `${provider} 可能已中断`,
+    done: (provider) => `${provider} 已完成`,
     idleOrDone: "AI Agent 空闲或已完成",
+    duration: (time) => `耗时 ${time}`,
+    queueMore: (count) => `还有 ${count} 条`,
     phase: {
       running: "正在运行",
       completed: "已完成",

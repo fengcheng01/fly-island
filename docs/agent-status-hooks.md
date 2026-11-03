@@ -104,6 +104,19 @@ Content sources per provider:
 
 If the script receives hook input it cannot turn into a message, it keeps the raw payload (first 8 KB) in `agent-last-hook-input.txt` next to `agent-status.json` for diagnosis.
 
+## Island Display
+
+While an agent is working, the collapsed island shows that agent's logo next to a live timer instead of the plain status dot. The timer starts when the prompt was submitted, which is the moment the running marker file was written, and it keeps counting until the turn ends.
+
+- Several agents working at the same time: the collapsed island cycles through them every 3 seconds.
+- When the turn ends, the timer freezes at the final duration and stays visible until that agent starts a new task.
+- A run that was never seen in the running phase, for example the island app was closed while the agent worked, has no known start time, so no duration is shown for it.
+- Failed and stalled runs use the same badge with the attention colour.
+
+The expanded island shows the captured result in a card. Cards queue up, so a second agent finishing at the same time is not dropped; the island shows them one after another and the card header tells how many are still waiting.
+
+The duration is computed in the app from the start time it remembered while the task was running. The hook scripts, the installer and the agent configuration files are unchanged, so existing installations need no hook reinstall.
+
 ## Manual Smoke Test
 
 After using the in-app installer, run these commands with the app-data scripts:

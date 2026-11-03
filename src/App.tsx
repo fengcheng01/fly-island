@@ -59,6 +59,19 @@ import {
 import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { MessageSourceIcon } from "./MessageSourceIcon";
+import { AgentProviderIcon } from "./AgentProviderIcon";
+import {
+  AGENT_PROVIDERS,
+  AGENT_PROVIDER_LABELS,
+  advanceAgentTiming,
+  createAgentTimingMap,
+  formatAgentDuration,
+  type AgentProvider,
+  type AgentStatusSnapshot,
+  type AgentTaskPhase,
+  type AgentTaskStatus,
+  type AgentTimingMap,
+} from "./agentStatus";
 import { CollapsedMessageContent } from "./CollapsedMessageContent";
 import { latestMessagePreview, messagePreviewText, type MessageSource } from "./messagePreview";
 import { UpdatePanel } from "./UpdatePanel";
@@ -82,8 +95,6 @@ type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq";
 type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
 type MediaPlaybackStatus = "unavailable" | "playing" | "paused";
-type AgentProvider = "codex" | "claudeCode" | "zcode" | "dsh";
-type AgentTaskPhase = "idle" | "running" | "completed" | "failed" | "stale";
 type AgentVisualState = "idle" | "running" | "attention";
 
 type TodoItem = {
@@ -188,23 +199,19 @@ type AudioLevel = {
   updatedAt: number;
 };
 
-type AgentTaskStatus = {
-  phase: AgentTaskPhase;
-  taskId?: string;
-  updatedAt: number;
-  message?: string;
-};
-
 type AgentMessageCard = {
   provider: AgentProvider;
   phase: AgentTaskPhase;
   message: string;
   updatedAt: number;
+  durationMs: number | null;
 };
 
-type AgentStatusSnapshot = Record<AgentProvider, AgentTaskStatus> & {
-  updatedAt: number;
-  statusPath: string;
+type AgentBadge = {
+  provider: AgentProvider;
+  state: "running" | "attention" | "done";
+  timerText: string | null;
+  label: string;
 };
 
 type AgentHooksInstallResult = {
@@ -279,7 +286,9 @@ type IslandShellProps = {
   mediaState: MediaState;
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
+  agentBadge: AgentBadge | null;
   agentMessageCard: AgentMessageCard | null;
+  agentMessageQueueCount: number;
   onDismissAgentMessage: () => void;
   onOpenPage: (page: IslandPage) => void;
   onWindowDragStart: () => void;
@@ -398,13 +407,8 @@ const DEFAULT_AGENT_STATUS: AgentStatusSnapshot = {
   updatedAt: 0,
   statusPath: "",
 };
-const AGENT_PROVIDERS: AgentProvider[] = ["codex", "claudeCode", "zcode", "dsh"];
-const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
-  codex: "Codex",
-  claudeCode: "Claude Code",
-  zcode: "ZCode",
-  dsh: "DSH",
-};
+const AGENT_ROTATION_INTERVAL_MS = 3000;
+const MAX_AGENT_MESSAGE_CARDS = 20;
 const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
   settings: {
     enabled: true,
@@ -1125,7 +1129,9 @@ export function IslandShell({
   mediaState,
   agentVisualState,
   agentStatusLabel,
+  agentBadge,
   agentMessageCard,
+  agentMessageQueueCount,
   onDismissAgentMessage,
   onOpenPage,
   onWindowDragStart,
@@ -1389,7 +1395,24 @@ export function IslandShell({
               }
             }}
           >
-            <span className={pulseClassName} title={agentStatusLabel} />
+            {agentBadge ? (
+              <span
+                className={[
+                  "island__agent-badge",
+                  `island__agent-badge--${agentBadge.state}`,
+                ].join(" ")}
+                title={agentBadge.label}
+              >
+                <AgentProviderIcon provider={agentBadge.provider} size={16} />
+                {agentBadge.timerText ? (
+                  <span className="island__agent-badge__timer">
+                    {agentBadge.timerText}
+                  </span>
+                ) : null}
+              </span>
+            ) : (
+              <span className={pulseClassName} title={agentStatusLabel} />
+            )}
             <CollapsedMessageContent preview={preview} enabled={!isExpanded && !isTucked}>
               {showCollapsedText && showTitle && (
                 <span className="island__brand">fly-island</span>
@@ -1571,7 +1594,18 @@ export function IslandShell({
                   {AGENT_PROVIDER_LABELS[agentMessageCard.provider]}
                   {" · "}
                   {getAgentPhaseLabel(agentMessageCard.phase, t)}
+                  {agentMessageCard.durationMs !== null ? (
+                    <>
+                      {" · "}
+                      {t.agent.duration(formatAgentDuration(agentMessageCard.durationMs))}
+                    </>
+                  ) : null}
                 </span>
+                {agentMessageQueueCount > 1 ? (
+                  <span className="agent-message-card__queue">
+                    {t.agent.queueMore(agentMessageQueueCount)}
+                  </span>
+                ) : null}
                 <button
                   className="agent-message-card__close"
                   type="button"
@@ -4086,8 +4120,17 @@ function IslandApp({
   const mediaTargetRef = useRef<string | null>(null);
   const [agentStatus, setAgentStatus] =
     useState<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
-  const [agentMessageCard, setAgentMessageCard] =
-    useState<AgentMessageCard | null>(null);
+  const [agentTimings, setAgentTimings] =
+    useState<AgentTimingMap>(createAgentTimingMap);
+  const agentTimingsRef = useRef<AgentTimingMap>(agentTimings);
+  const [agentClock, setAgentClock] = useState(() => Date.now());
+  const [agentRotationIndex, setAgentRotationIndex] = useState(0);
+  const [agentMessageCards, setAgentMessageCards] = useState<AgentMessageCard[]>(
+    [],
+  );
+  const [agentRunningCard, setAgentRunningCard] = useState<AgentMessageCard | null>(
+    null,
+  );
   const prevAgentStatusRef = useRef<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
   const didHydrateAgentStatusRef = useRef(false);
   const isRefreshingAgentStatus = useRef(false);
@@ -4448,7 +4491,24 @@ function IslandApp({
     const previous = prevAgentStatusRef.current;
     prevAgentStatusRef.current = agentStatus;
 
-    let latestCard: AgentMessageCard | null = null;
+    // While a task runs the snapshot carries the marker file creation time,
+    // which is the moment the prompt was submitted. The hook removes that
+    // marker when the turn ends, so the frozen duration is computed from the
+    // start time remembered here.
+    const { timings, finished } = advanceAgentTiming(
+      agentTimingsRef.current,
+      previous,
+      agentStatus,
+    );
+    if (timings !== agentTimingsRef.current) {
+      agentTimingsRef.current = timings;
+      setAgentTimings(timings);
+      setAgentClock(Date.now());
+    }
+
+    const resultCards: AgentMessageCard[] = [];
+    let runningCard: AgentMessageCard | null = null;
+
     for (const provider of AGENT_PROVIDERS) {
       const status = agentStatus[provider];
       if (status.phase === previous[provider]?.phase) {
@@ -4459,35 +4519,102 @@ function IslandApp({
         (status.phase === "completed" || status.phase === "failed") &&
         status.message
       ) {
-        latestCard = {
+        resultCards.push({
           provider,
           phase: status.phase,
           message: status.message,
           updatedAt: status.updatedAt,
-        };
+          durationMs:
+            finished.find((run) => run.provider === provider)?.durationMs ?? null,
+        });
         if (settings.agentAutoExpand) {
           setIslandMode("expanded");
         }
-      } else if (status.phase === "running" && status.message && !latestCard) {
-        latestCard = {
+      } else if (status.phase === "running" && status.message) {
+        runningCard = {
           provider,
           phase: "running",
           message: status.message,
           updatedAt: status.updatedAt,
+          durationMs: null,
         };
       }
     }
 
-    if (latestCard) {
-      setAgentMessageCard(latestCard);
+    // Results queue up so a second agent finishing at the same time is not
+    // dropped; the island shows them one after another.
+    if (resultCards.length > 0) {
+      setAgentMessageCards((currentCards) =>
+        [...currentCards, ...resultCards].slice(-MAX_AGENT_MESSAGE_CARDS),
+      );
     }
+
+    if (runningCard) {
+      setAgentRunningCard(runningCard);
+    }
+
+    // A live prompt card is dropped once its task leaves the running phase.
+    setAgentRunningCard((currentCard) => {
+      if (!currentCard) {
+        return currentCard;
+      }
+      return agentStatus[currentCard.provider].phase === "running"
+        ? currentCard
+        : null;
+    });
   }, [agentStatus, settings.agentAutoExpand]);
 
+  // The agent snapshot only changes when a phase changes, so a running task
+  // needs its own heartbeat to make the elapsed timer advance.
+  const hasActiveAgent = useMemo(
+    () =>
+      AGENT_PROVIDERS.some(
+        (provider) =>
+          agentStatus[provider].phase === "running" ||
+          agentStatus[provider].phase === "stale",
+      ),
+    [agentStatus],
+  );
+
   useEffect(() => {
-    if (mode === "collapsed") {
-      setAgentMessageCard(null);
+    if (!hasActiveAgent) {
+      return;
     }
-  }, [mode]);
+    const timer = window.setInterval(() => setAgentClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveAgent]);
+
+  // Agents that are still working, oldest first.
+  const runningAgents = useMemo(
+    () =>
+      AGENT_PROVIDERS.filter(
+        (provider) =>
+          agentStatus[provider].phase === "running" ||
+          agentStatus[provider].phase === "stale",
+      ).sort(
+        (a, b) =>
+          (agentTimings[a].startedAt ?? Number.MAX_SAFE_INTEGER) -
+          (agentTimings[b].startedAt ?? Number.MAX_SAFE_INTEGER),
+      ),
+    [agentStatus, agentTimings],
+  );
+  const runningAgentsKey = runningAgents.join(",");
+
+  useEffect(() => {
+    setAgentRotationIndex(0);
+  }, [runningAgentsKey]);
+
+  // While the island is collapsed the badge cycles through the agents that
+  // are running at the same time.
+  useEffect(() => {
+    if (mode !== "collapsed" || runningAgents.length <= 1) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setAgentRotationIndex((index) => (index + 1) % runningAgents.length);
+    }, AGENT_ROTATION_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [mode, runningAgentsKey, runningAgents.length]);
 
   const updateClipboardSettings = useCallback(
     async (nextSettings: ClipboardHistorySettings) => {
@@ -5762,6 +5889,79 @@ function IslandApp({
     () => getAgentStatusLabel(agentStatus, t),
     [agentStatus, t],
   );
+  const agentBadge = useMemo<AgentBadge | null>(() => {
+    const runningProvider =
+      runningAgents.length > 0
+        ? runningAgents[agentRotationIndex % runningAgents.length]
+        : null;
+
+    if (runningProvider) {
+      const startedAt = agentTimings[runningProvider].startedAt;
+      const elapsedMs = startedAt ? Math.max(0, agentClock - startedAt) : null;
+      const timerText =
+        elapsedMs !== null ? formatAgentDuration(elapsedMs) : null;
+      const providerLabel = AGENT_PROVIDER_LABELS[runningProvider];
+      const isStale = agentStatus[runningProvider].phase === "stale";
+      const label = isStale
+        ? t.agent.stale(providerLabel)
+        : t.agent.running(providerLabel);
+
+      return {
+        provider: runningProvider,
+        state: isStale ? "attention" : "running",
+        timerText,
+        label: timerText ? `${label} · ${timerText}` : label,
+      };
+    }
+
+    // Nothing is running: keep the last finished run visible until that
+    // agent starts a new task.
+    const finishedProvider = AGENT_PROVIDERS.filter(
+      (provider) => agentTimings[provider].durationMs !== null,
+    ).sort(
+      (a, b) =>
+        (agentTimings[b].finishedAt ?? 0) - (agentTimings[a].finishedAt ?? 0),
+    )[0];
+
+    if (finishedProvider) {
+      const timerText = formatAgentDuration(
+        agentTimings[finishedProvider].durationMs ?? 0,
+      );
+      const providerLabel = AGENT_PROVIDER_LABELS[finishedProvider];
+      const phase = agentStatus[finishedProvider].phase;
+      const label =
+        phase === "failed"
+          ? t.agent.failed(providerLabel)
+          : phase === "stale"
+            ? t.agent.stale(providerLabel)
+            : t.agent.done(providerLabel);
+
+      return {
+        provider: finishedProvider,
+        state: phase === "failed" || phase === "stale" ? "attention" : "done",
+        timerText,
+        label: `${label} · ${t.agent.duration(timerText)}`,
+      };
+    }
+
+    return null;
+  }, [
+    agentStatus,
+    agentTimings,
+    agentClock,
+    agentRotationIndex,
+    runningAgents,
+    t,
+  ]);
+  const agentMessageCard = agentMessageCards[0] ?? agentRunningCard;
+
+  const dismissAgentMessage = useCallback(() => {
+    if (agentMessageCards.length > 0) {
+      setAgentMessageCards((currentCards) => currentCards.slice(1));
+      return;
+    }
+    setAgentRunningCard(null);
+  }, [agentMessageCards.length]);
 
   const openTranslator = useCallback(() => {
     void invoke("toggle_translation_window").catch((error) => {
@@ -5789,8 +5989,10 @@ function IslandApp({
         mediaState={mediaState}
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
+        agentBadge={agentBadge}
         agentMessageCard={agentMessageCard}
-        onDismissAgentMessage={() => setAgentMessageCard(null)}
+        agentMessageQueueCount={agentMessageCards.length}
+        onDismissAgentMessage={dismissAgentMessage}
         onOpenPage={openIslandPage}
         onWindowDragStart={startIslandDrag}
         onCollapse={collapseIsland}
