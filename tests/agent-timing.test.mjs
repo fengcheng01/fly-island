@@ -4,6 +4,9 @@ import {
   advanceAgentTiming,
   createAgentTimingMap,
   formatAgentDuration,
+  isAgentHoldEcho,
+  isNewAgentCompletion,
+  isNewAgentRun,
 } from "../src/agentStatus.ts";
 
 const IDLE = { phase: "idle", updatedAt: 0 };
@@ -117,6 +120,68 @@ test("the timing map is reused when no provider changed", () => {
   const result = advanceAgentTiming(timings, idle, idle);
 
   assert.equal(result.timings, timings);
+});
+
+test("a completion is new when the phase becomes finished or a finished status advances", () => {
+  const running = { phase: "running", updatedAt: 1000 };
+  const done = { phase: "completed", updatedAt: 2000 };
+  const idle = { phase: "idle", updatedAt: 0 };
+
+  assert.equal(isNewAgentCompletion(running, done, null), true);
+  assert.equal(isNewAgentCompletion(idle, done, null), true);
+  assert.equal(isNewAgentCompletion(undefined, done, null), true);
+  assert.equal(isNewAgentCompletion(done, done, null), false);
+  assert.equal(isNewAgentCompletion({ phase: "completed", updatedAt: 3000 }, done, null), false);
+  // A second completion lands while the status already reports a finished run.
+  assert.equal(isNewAgentCompletion(done, { phase: "completed", updatedAt: 3500 }, 2000), true);
+  // The same finished turn reported again after a hold marker is already handled.
+  assert.equal(isNewAgentCompletion(running, done, 2000), false);
+  assert.equal(isNewAgentCompletion(running, { phase: "failed", updatedAt: 2500 }, null), true);
+  assert.equal(isNewAgentCompletion(done, running, null), false);
+});
+
+test("the hold marker around a fast task is not mistaken for a new run", () => {
+  const done = { phase: "completed", updatedAt: 2000, message: "finished text" };
+  const echo = { phase: "running", updatedAt: 2500, message: "finished text" };
+  const nextRun = { phase: "running", updatedAt: 2600, message: "next prompt" };
+
+  assert.equal(isAgentHoldEcho(done, echo), true);
+  assert.equal(isNewAgentRun(done, echo), false);
+  assert.equal(isAgentHoldEcho(done, nextRun), false);
+  assert.equal(isNewAgentRun(done, nextRun), true);
+  // A new prompt without captured text still differs from the finished turn.
+  assert.equal(isAgentHoldEcho(done, { phase: "running", updatedAt: 2700 }), false);
+  // The marker file time moves while the run is in progress.
+  assert.equal(isNewAgentRun({ phase: "running", updatedAt: 1000 }, nextRun), false);
+  assert.equal(isNewAgentRun(undefined, nextRun), true);
+  // Without any captured text only the hold window decides.
+  assert.equal(
+    isAgentHoldEcho({ phase: "completed", updatedAt: 1000 }, { phase: "running", updatedAt: 1400 }),
+    true,
+  );
+  assert.equal(
+    isAgentHoldEcho({ phase: "completed", updatedAt: 1000 }, { phase: "running", updatedAt: 60000 }),
+    false,
+  );
+});
+
+test("a hold echo keeps the frozen duration and reports no second completion", () => {
+  const running = snapshot({ zcode: { phase: "running", updatedAt: 1000 } });
+  const started = advanceAgentTiming(createAgentTimingMap(), null, running);
+
+  const done = snapshot({ zcode: { phase: "completed", updatedAt: 1500, message: "quick" } });
+  const finished = advanceAgentTiming(started.timings, running, done);
+  assert.equal(finished.timings.zcode.durationMs, 500);
+
+  const echo = snapshot({ zcode: { phase: "running", updatedAt: 1600, message: "quick" } });
+  const afterEcho = advanceAgentTiming(finished.timings, done, echo);
+  assert.equal(afterEcho.timings.zcode.durationMs, 500);
+  assert.equal(afterEcho.timings.zcode.startedAt, null);
+
+  const again = snapshot({ zcode: { phase: "completed", updatedAt: 1500, message: "quick" } });
+  const afterExpiry = advanceAgentTiming(afterEcho.timings, echo, again);
+  assert.equal(afterExpiry.timings.zcode.durationMs, 500);
+  assert.deepEqual(afterExpiry.finished, []);
 });
 
 test("durations are formatted as mm:ss and grow to h:mm:ss", () => {

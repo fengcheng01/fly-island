@@ -56,6 +56,73 @@ export type AgentTimingAdvance = {
   finished: AgentRunFinished[];
 };
 
+// The hook keeps the status light red for at least this long after a fast task
+// stops, by reporting the finished turn as running again.
+export const AGENT_HOLD_WINDOW_MS = 1000;
+
+// The hook writes a short-lived "running" hold right after a fast task stops so
+// the status light stays visible for a moment. It reuses the finished turn's
+// message and reports the current time, so it must not be mistaken for a new
+// run. A real new run carries the new prompt and starts later.
+export function isAgentHoldEcho(
+  previous: AgentTaskStatus | undefined,
+  next: AgentTaskStatus,
+): boolean {
+  if (next.phase !== "running") {
+    return false;
+  }
+
+  if (previous?.phase !== "completed" && previous?.phase !== "failed") {
+    return false;
+  }
+
+  // The hold copies the finished turn's message, while a real new run carries
+  // the new prompt, so the messages decide whenever either side has one.
+  if (previous.message || next.message) {
+    return previous.message === next.message;
+  }
+
+  // Neither side carries text: only the hook's short hold window separates a
+  // repeated report from a real new run.
+  return next.updatedAt - previous.updatedAt <= AGENT_HOLD_WINDOW_MS;
+}
+
+// A completion is new when the phase just became finished, or when a finished
+// status advanced past the last handled one. The second case covers a
+// completion that lands while the status already reports another finished run,
+// which would otherwise be dropped as an unchanged phase. lastFinishedAt is the
+// watermark of the completion already handled for this provider.
+export function isNewAgentCompletion(
+  previous: AgentTaskStatus | undefined,
+  next: AgentTaskStatus,
+  lastFinishedAt: number | null,
+): boolean {
+  if (next.phase !== "completed" && next.phase !== "failed") {
+    return false;
+  }
+
+  if (lastFinishedAt !== null && next.updatedAt <= lastFinishedAt) {
+    return false;
+  }
+
+  return (
+    previous?.phase !== next.phase || (previous?.updatedAt ?? 0) < next.updatedAt
+  );
+}
+
+// A run is new only when the phase turns running; the marker file time moves
+// while the run is in progress and must not restart the live prompt card.
+export function isNewAgentRun(
+  previous: AgentTaskStatus | undefined,
+  next: AgentTaskStatus,
+): boolean {
+  return (
+    next.phase === "running" &&
+    previous?.phase !== "running" &&
+    !isAgentHoldEcho(previous, next)
+  );
+}
+
 // Advances the timing state for every provider. Returns the same map object
 // when nothing changed so callers can skip a state update.
 export function advanceAgentTiming(
@@ -77,6 +144,12 @@ export function advanceAgentTiming(
     const current = timings[provider];
 
     if (status.phase === "running") {
+      // The hold marker the hook writes around a fast task reports the finished
+      // turn again; treating it as a new run would clear the frozen duration.
+      if (isAgentHoldEcho(previous?.[provider], status)) {
+        continue;
+      }
+
       // The snapshot carries the marker file time while a task runs, but the
       // persisted status can report an older value once that marker is gone.
       // The start time of a run is therefore taken once and never replaced.
@@ -97,6 +170,12 @@ export function advanceAgentTiming(
     }
 
     if (status.phase !== "completed" && status.phase !== "failed") {
+      continue;
+    }
+
+    // The same finished turn can be reported more than once around a hold
+    // marker; only a write newer than the handled one is a new completion.
+    if (current.finishedAt !== null && status.updatedAt <= current.finishedAt) {
       continue;
     }
 

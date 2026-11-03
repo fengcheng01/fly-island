@@ -112,7 +112,13 @@ While an agent is working, the collapsed island shows that agent's logo next to 
 - While an agent is running, the collapsed island hides the pending todo count to leave room for the logo and the timer. The count comes back once the run ends and the badge only shows the frozen duration.
 - When the turn ends, the timer freezes at the final duration and stays visible until that agent starts a new task.
 - A run that was never seen in the running phase, for example the island app was closed while the agent worked, has no known start time, so no duration is shown for it.
+- The finished badge comes from `agent-status.json` itself, so it stays visible for the last finished run even when that run's duration is unknown.
 - Failed and stalled runs use the same badge with the attention colour.
+
+Two details about how the app reads the hook output:
+
+- The hook keeps the light red for about 800ms after a very fast task by writing a hold file, which reports the finished turn as `running` again. The app recognises that report by its unchanged message (or, when neither side has text, by its timing) and does not show a second result card for it.
+- A completion is also shown when `agent-status.json` reports a finished phase again with a newer `updatedAt`, so a result is not lost when a running phase was missed, for example while the app was restarting or when the status file was rewritten.
 
 The expanded island shows the captured result in a card. Cards queue up, so a second agent finishing at the same time is not dropped; the island shows them one after another and the card header tells how many are still waiting.
 

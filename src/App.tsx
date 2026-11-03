@@ -66,6 +66,8 @@ import {
   advanceAgentTiming,
   createAgentTimingMap,
   formatAgentDuration,
+  isNewAgentCompletion,
+  isNewAgentRun,
   type AgentProvider,
   type AgentStatusSnapshot,
   type AgentTaskPhase,
@@ -4451,7 +4453,8 @@ function IslandApp({
         AGENT_PROVIDERS.every((provider) =>
           currentState[provider].phase === snapshot[provider].phase &&
           currentState[provider].taskId === snapshot[provider].taskId &&
-          currentState[provider].message === snapshot[provider].message,
+          currentState[provider].message === snapshot[provider].message &&
+          currentState[provider].updatedAt === snapshot[provider].updatedAt,
         )
           ? currentState
           : snapshot,
@@ -4511,17 +4514,19 @@ function IslandApp({
 
     for (const provider of AGENT_PROVIDERS) {
       const status = agentStatus[provider];
-      if (status.phase === previous[provider]?.phase) {
-        continue;
-      }
+      const before = previous[provider];
 
       if (
-        (status.phase === "completed" || status.phase === "failed") &&
+        isNewAgentCompletion(
+          before,
+          status,
+          agentTimingsRef.current[provider].finishedAt,
+        ) &&
         status.message
       ) {
         resultCards.push({
           provider,
-          phase: status.phase,
+          phase: status.phase === "failed" ? "failed" : "completed",
           message: status.message,
           updatedAt: status.updatedAt,
           durationMs:
@@ -4530,7 +4535,7 @@ function IslandApp({
         if (settings.agentAutoExpand) {
           setIslandMode("expanded");
         }
-      } else if (status.phase === "running" && status.message) {
+      } else if (isNewAgentRun(before, status) && status.message) {
         runningCard = {
           provider,
           phase: "running",
@@ -5914,33 +5919,30 @@ function IslandApp({
       };
     }
 
-    // Nothing is running: keep the last finished run visible until that
-    // agent starts a new task.
+    // Nothing is running: keep the last finished run visible until that agent
+    // starts a new task. The badge comes from the status itself so a missing
+    // duration never makes it disappear.
     const finishedProvider = AGENT_PROVIDERS.filter(
-      (provider) => agentTimings[provider].durationMs !== null,
-    ).sort(
-      (a, b) =>
-        (agentTimings[b].finishedAt ?? 0) - (agentTimings[a].finishedAt ?? 0),
-    )[0];
+      (provider) =>
+        agentStatus[provider].phase === "completed" ||
+        agentStatus[provider].phase === "failed",
+    ).sort((a, b) => agentStatus[b].updatedAt - agentStatus[a].updatedAt)[0];
 
     if (finishedProvider) {
-      const timerText = formatAgentDuration(
-        agentTimings[finishedProvider].durationMs ?? 0,
-      );
+      const durationMs = agentTimings[finishedProvider].durationMs;
+      const timerText =
+        durationMs !== null ? formatAgentDuration(durationMs) : null;
       const providerLabel = AGENT_PROVIDER_LABELS[finishedProvider];
-      const phase = agentStatus[finishedProvider].phase;
-      const label =
-        phase === "failed"
-          ? t.agent.failed(providerLabel)
-          : phase === "stale"
-            ? t.agent.stale(providerLabel)
-            : t.agent.done(providerLabel);
+      const isFailed = agentStatus[finishedProvider].phase === "failed";
+      const label = isFailed
+        ? t.agent.failed(providerLabel)
+        : t.agent.done(providerLabel);
 
       return {
         provider: finishedProvider,
-        state: phase === "failed" || phase === "stale" ? "attention" : "done",
+        state: isFailed ? "attention" : "done",
         timerText,
-        label: `${label} · ${t.agent.duration(timerText)}`,
+        label: timerText ? `${label} · ${t.agent.duration(timerText)}` : label,
       };
     }
 
